@@ -11,11 +11,36 @@ import (
 // buffer is just here to make bytes.Buffer an io.ReadWriteCloser.
 type buffer struct {
 	bytes.Buffer
+	isClosed bool
+}
+
+func (b *buffer) Read(p []byte) (n int, err error) {
+	if b.isClosed && b.Len() < 1 {
+		return 0, io.EOF
+	}
+
+	n, err = b.Read(p)
+
+	if err != nil {
+		return
+	}
+
+	if b.isClosed {
+
+	}
+
+	if n > 0 && len(p) == n && b.isClosed {
+		b.Buffer.Reset()
+	}
+}
+
+func (b *buffer) Write(p []byte) (n int, err error) {
+	return b.Write(p)
 }
 
 // Add a Close method to our buffer so that we satisfy io.ReadWriteCloser.
 func (b *buffer) Close() error {
-	b.Buffer.Reset()
+	b.isClosed = true
 	return nil
 }
 
@@ -69,19 +94,15 @@ func lagReader(reader io.Reader, tickDelay time.Duration) io.Reader {
 }
 
 func randomReader(size int) io.Reader {
-	var rwc io.ReadWriteCloser
-	rwc = &buffer{}
+	rw := &bytes.Buffer{}
 
 	if size < 1 {
-		defer rwc.Close()
-		return rwc
+		return rw
 	}
 
 	const chunkSize = 8
 
-	go func(wc io.WriteCloser) {
-		defer wc.Close()
-
+	go func(w io.Writer) {
 		b := make([]byte, chunkSize)
 
 		for i := 0; ; i++ {
@@ -89,23 +110,22 @@ func randomReader(size int) io.Reader {
 			remaining := size - (chunkSize * i)
 
 			if remaining >= chunkSize {
-				wc.Write(b)
+				w.Write(b)
 				continue
 			}
 
 			if remaining > 0 {
-				fmt.Println(remaining)
-				n, _ := rwc.Write(b)
-
-				fmt.Println("AAA", remaining, n, "AAA")
-				continue
+				fmt.Println("size:", size, ", remaining:", remaining, ", read:", len(b))
+				w.Write(b)
 			}
 
 			break
 		}
-	}(rwc)
+	}(rw)
 
-	return rwc
+	time.Sleep(time.Millisecond)
+
+	return rw
 }
 
 func repeaterStream(header byte, headerSize int, body byte, bodySize int, totalTime time.Duration) io.Reader {
