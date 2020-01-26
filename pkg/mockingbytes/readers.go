@@ -70,11 +70,15 @@ func RandomReader(size int, options ...ReaderOpt) (io.Reader, error) {
 			s -= n
 		}
 
-		if s > 0 {
-			b := make([]byte, s)
+		if s > cfg.chunkMin {
 			rand.Read(b)
-			n, _ := wc.Write(b)
+			n, _ := wc.Write(b[0:cfg.chunkMin])
 			s -= n
+		}
+
+		if s > 0 {
+			rand.Read(b)
+			wc.Write(b[0:s])
 		}
 	}(rwc, size)
 
