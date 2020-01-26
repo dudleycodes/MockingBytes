@@ -1,202 +1,204 @@
 package mockingbytes
 
 import (
-	"bytes"
-	"fmt"
+	"errors"
 	"io"
 	"math/rand"
-	"time"
 )
 
-// buffer is just here to make bytes.Buffer an io.ReadWriteCloser.
-type buffer struct {
-	bytes.Buffer
-	isClosed bool
+type ReaderOpt func(*rCfg) error
+
+type rCfg struct {
+	chunkMax     int
+	chunkMin     int
+	getChunkSize func() int
 }
 
-func (b *buffer) Read(p []byte) (n int, err error) {
-	if b.isClosed && b.Len() < 1 {
-		return 0, io.EOF
-	}
-
-	n, err = b.Read(p)
-
-	if err != nil {
-		return
-	}
-
-	if b.isClosed {
-
-	}
-
-	if n > 0 && len(p) == n && b.isClosed {
-		b.Buffer.Reset()
+func defaultReaderCfg() *rCfg {
+	return &rCfg{
+		chunkMax:     8,
+		chunkMin:     8,
+		getChunkSize: func() int { return 8 },
 	}
 }
 
-func (b *buffer) Write(p []byte) (n int, err error) {
-	return b.Write(p)
-}
-
-// Add a Close method to our buffer so that we satisfy io.ReadWriteCloser.
-func (b *buffer) Close() error {
-	b.isClosed = true
-	return nil
-}
-
-func lagReader(reader io.Reader, tickDelay time.Duration) io.Reader {
-	var rwc io.ReadWriteCloser
-
-	c := make(chan []byte, 16)
-
-	go func(r io.Reader, o chan<- []byte) {
-		defer close(o)
-
-		for {
-			b := make([]byte, rand.Intn(3)+3)
-			_, err := r.Read(b)
-
-			if len(b) > 0 {
-				o <- b
-			}
-
-			if err == io.EOF {
-				break
-			} else if err != nil {
-				panic(err)
-			}
+func SetChunkJitter(min, max uint16) func(*rCfg) error {
+	return func(c *rCfg) error {
+		if min < 1 {
+			return errors.New("Can not have a min value less than 1")
 		}
-	}(reader, c)
 
-	go func(wc io.WriteCloser, i <-chan []byte, d time.Duration) {
+		if max < 1 {
+			return errors.New("Can not have a max value less than 1")
+		}
+
+		if min > max {
+			t := min
+			min = max
+			max = t
+		}
+
+		c.chunkMin, c.chunkMax = int(min), int(max)
+
+		c.getChunkSize = func() int {
+			return rand.Intn(c.chunkMax-c.chunkMin) + c.chunkMin
+		}
+
+		return nil
+	}
+}
+
+func RandomReader(size int, options ...ReaderOpt) (io.Reader, error) {
+	cfg, rwc := defaultReaderCfg(), &buffer{}
+
+	for _, option := range options {
+		if err := option(cfg); err != nil {
+			return nil, err
+		}
+	}
+
+	var chunkSize int
+	go func(wc io.WriteCloser, s int) {
+		b := make([]byte, cfg.chunkMax)
 		defer wc.Close()
 
-		for {
-			start := time.Now()
+		chunkSize = cfg.getChunkSize()
 
-			b, more := <-i
-
-			if _, err := wc.Write(b); err != nil {
-				panic(err)
-			}
-
-			if w := time.Since(start); w < d {
-				time.Sleep(d - w)
-			}
-
-			if !more {
-				break
-			}
-		}
-	}(rwc, c, tickDelay)
-
-	return rwc
-}
-
-func randomReader(size int) io.Reader {
-	rw := &bytes.Buffer{}
-
-	if size < 1 {
-		return rw
-	}
-
-	const chunkSize = 8
-
-	go func(w io.Writer) {
-		b := make([]byte, chunkSize)
-
-		for i := 0; ; i++ {
+		for s >= chunkSize {
 			rand.Read(b)
-			remaining := size - (chunkSize * i)
-
-			if remaining >= chunkSize {
-				w.Write(b)
-				continue
-			}
-
-			if remaining > 0 {
-				fmt.Println("size:", size, ", remaining:", remaining, ", read:", len(b))
-				w.Write(b)
-			}
-
-			break
+			n, _ := wc.Write(b[0:chunkSize])
+			s -= n
 		}
-	}(rw)
 
-	time.Sleep(time.Millisecond)
+		if s > 0 {
+			b := make([]byte, s)
+			rand.Read(b)
+			n, _ := wc.Write(b)
+			s -= n
+		}
+	}(rwc, size)
 
-	return rw
+	return rwc, nil
 }
 
-func repeaterStream(header byte, headerSize int, body byte, bodySize int, totalTime time.Duration) io.Reader {
-	rand.Seed(time.Now().UnixNano())
+// func lagReader(reader io.Reader, tickDelay time.Duration) io.Reader {
+// 	var rwc io.ReadWriteCloser
 
-	if headerSize < 0 {
-		headerSize = 0
-	}
+// 	c := make(chan []byte, 16)
 
-	if bodySize < 0 {
-		bodySize = 0
-	}
+// 	go func(r io.Reader, o chan<- []byte) {
+// 		defer close(o)
 
-	if totalTime < 0 {
-		totalTime = 0
-	}
+// 		for {
+// 			b := make([]byte, rand.Intn(3)+3)
+// 			_, err := r.Read(b)
 
-	var rwc io.ReadWriteCloser
+// 			if len(b) > 0 {
+// 				o <- b
+// 			}
 
-	go func(wc io.WriteCloser) {
-		defer wc.Close()
+// 			if err == io.EOF {
+// 				break
+// 			} else if err != nil {
+// 				panic(err)
+// 			}
+// 		}
+// 	}(reader, c)
 
-		totalBytes := headerSize + bodySize
-		if totalBytes < 1 {
-			time.Sleep(totalTime)
-			return
-		}
+// 	go func(wc io.WriteCloser, i <-chan []byte, d time.Duration) {
+// 		defer wc.Close()
 
-		delayTick := time.Duration(int64(totalTime) / int64(headerSize+bodySize))
-		buf := new(bytes.Buffer)
+// 		for {
+// 			start := time.Now()
 
-		// Done in a single loop so that header and body contents can blend together in a single write
-		for bytesRemaining := totalBytes; bytesRemaining > 0; {
-			bytesToSend := rand.Intn(3) + 1
-			if bytesToSend > bytesRemaining {
-				bytesToSend = bytesRemaining
-			}
-			buf.Grow(bytesToSend)
+// 			b, more := <-i
 
-			if headerRemaining := bytesRemaining - bodySize; headerRemaining > 0 {
-				headerToSend := bytesToSend
-				if headerToSend > headerRemaining {
-					headerToSend = headerRemaining
-				}
+// 			if _, err := wc.Write(b); err != nil {
+// 				panic(err)
+// 			}
 
-				buf.Write(bytes.Repeat([]byte{header}, headerToSend))
-				bytesToSend -= buf.Len()
-			}
+// 			if w := time.Since(start); w < d {
+// 				time.Sleep(d - w)
+// 			}
 
-			if bytesToSend > 0 {
-				if bodyRemaining := bytesRemaining - headerSize; bodyRemaining > 0 {
-					bodyToSend := bytesToSend
-					if bodyToSend > bodyRemaining {
-						bodyToSend = bodyRemaining
-					}
+// 			if !more {
+// 				break
+// 			}
+// 		}
+// 	}(rwc, c, tickDelay)
 
-					buf.Write(bytes.Repeat([]byte{body}, bodyToSend))
-					bytesToSend = 0
-				}
-			}
+// 	return rwc
+// }
 
-			n, _ := io.Copy(rwc, buf)
-			buf.Reset()
+// func repeaterStream(header byte, headerSize int, body byte, bodySize int, totalTime time.Duration) io.Reader {
+// 	rand.Seed(time.Now().UnixNano())
 
-			for i := 0; i < int(n); i++ {
-				time.Sleep(delayTick)
-			}
+// 	if headerSize < 0 {
+// 		headerSize = 0
+// 	}
 
-			bytesRemaining -= int(n)
-		}
-	}(rwc)
+// 	if bodySize < 0 {
+// 		bodySize = 0
+// 	}
 
-	return rwc
-}
+// 	if totalTime < 0 {
+// 		totalTime = 0
+// 	}
+
+// 	var rwc io.ReadWriteCloser
+
+// 	go func(wc io.WriteCloser) {
+// 		defer wc.Close()
+
+// 		totalBytes := headerSize + bodySize
+// 		if totalBytes < 1 {
+// 			time.Sleep(totalTime)
+// 			return
+// 		}
+
+// 		delayTick := time.Duration(int64(totalTime) / int64(headerSize+bodySize))
+// 		buf := new(bytes.Buffer)
+
+// 		// Done in a single loop so that header and body contents can blend together in a single write
+// 		for bytesRemaining := totalBytes; bytesRemaining > 0; {
+// 			bytesToSend := rand.Intn(3) + 1
+// 			if bytesToSend > bytesRemaining {
+// 				bytesToSend = bytesRemaining
+// 			}
+// 			buf.Grow(bytesToSend)
+
+// 			if headerRemaining := bytesRemaining - bodySize; headerRemaining > 0 {
+// 				headerToSend := bytesToSend
+// 				if headerToSend > headerRemaining {
+// 					headerToSend = headerRemaining
+// 				}
+
+// 				buf.Write(bytes.Repeat([]byte{header}, headerToSend))
+// 				bytesToSend -= buf.Len()
+// 			}
+
+// 			if bytesToSend > 0 {
+// 				if bodyRemaining := bytesRemaining - headerSize; bodyRemaining > 0 {
+// 					bodyToSend := bytesToSend
+// 					if bodyToSend > bodyRemaining {
+// 						bodyToSend = bodyRemaining
+// 					}
+
+// 					buf.Write(bytes.Repeat([]byte{body}, bodyToSend))
+// 					bytesToSend = 0
+// 				}
+// 			}
+
+// 			n, _ := io.Copy(rwc, buf)
+// 			buf.Reset()
+
+// 			for i := 0; i < int(n); i++ {
+// 				time.Sleep(delayTick)
+// 			}
+
+// 			bytesRemaining -= int(n)
+// 		}
+// 	}(rwc)
+
+// 	return rwc
+// }

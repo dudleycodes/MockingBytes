@@ -1,33 +1,26 @@
 package mockingbytes
 
 import (
-	"io"
+	"fmt"
 	"io/ioutil"
-	"math"
 	"testing"
 )
 
 func TestRandomReader(t *testing.T) {
-	//t.Parallel()
+	t.Parallel()
 
-	tests := []int{-42, 0, 1, 7, 8, 42, 256, 512, 1024, 1048576, math.MaxInt32}
+	tests := []int{-42, 0, 1, 7, 8, 42, 256, 512, 1024, 1048576}
 
 	for _, test := range tests {
-		t.Run(string(test), func(t *testing.T) {
-			actual := []byte{}
-			var err error
-			r := randomReader(test)
-
-			for {
-				b, err := ioutil.ReadAll(r)
-				actual = append(actual, b...)
-
-				if err != nil {
-					break
-				}
+		t.Run(fmt.Sprintf("%d", test), func(t *testing.T) {
+			r, err := RandomReader(test, SetChunkJitter(2, 8))
+			if err != nil {
+				t.Fatalf("Error while creating reader: %s", err.Error())
 			}
 
-			if err != io.EOF {
+			actual, err := ioutil.ReadAll(r)
+
+			if err != nil {
 				t.Fatalf("Created a random reader of size %d got an unexpected error reading: %q", test, err.Error())
 			}
 
