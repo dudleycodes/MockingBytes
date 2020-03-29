@@ -49,7 +49,8 @@ func SetChunkJitter(min, max uint16) func(*rCfg) error {
 }
 
 func RandomReader(size int, options ...ReaderOpt) (io.Reader, error) {
-	cfg, rwc := defaultReaderCfg(), &buffer{}
+	rawBuffer := make([]byte, 64)
+	cfg, rwc := defaultReaderCfg(), newBuffer(rawBuffer)
 
 	for _, option := range options {
 		if err := option(cfg); err != nil {

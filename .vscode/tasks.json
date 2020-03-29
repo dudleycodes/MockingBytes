@@ -6,7 +6,7 @@
             "type":"shell",
             "command": "go get -u -t ./... && go mod tidy",
             "windows": {
-                "command": "go get -u -t ./...; go mod tidy"
+                "command": "go get -u -t ./...; if($?) { go mod tidy }"
             },
             "group":"none",
             "presentation": {
@@ -19,21 +19,13 @@
             "label":"Run unit tests & generate coverage report",
             "type":"shell",
             "command": "go test ./... --covermode=count --coverprofile=coverage.out && go tool cover --html=coverage.out",
+            "windows": {
+                "command": "go test ./... --covermode=count --coverprofile=coverage.out; if($?) { go tool cover --html=coverage.out }"
+            },
             "group":"none",
             "presentation": {
                 "reveal": "always",
                 "panel": "new"
-            },
-            "problemMatcher": [],
-        },
-        {
-            "label":"Generate linting report",
-            "type":"shell",
-            "command":"golangci-lint run",
-            "group":"none",
-            "presentation": {
-                "reveal": "always",
-                "panel": "new",
             },
             "problemMatcher": [],
         }
